@@ -1,0 +1,20 @@
+build:
+  image: "533267115767.dkr.ecr.us-west-2.amazonaws.com/idp-builder/node:4fa61b1"
+  cmd: "task build"
+
+config:
+  shared:
+    xray_enabled: false
+    memory: 512
+    lambda_runtime: "nodejs22.x"
+    lambda_handler: "index.handler"
+    snap_start_enabled: false
+    timeout_in_seconds: 15
+  dev:
+    xray_enabled: true
+  qa:
+    xray_enabled: true
+  staging:
+    xray_enabled: true
+  prod:
+    xray_enabled: true

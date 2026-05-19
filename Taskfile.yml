@@ -1,0 +1,513 @@
+version: "3"
+
+vars:
+  FB_CONFIG_PATH: "{{.ROOT_DIR}}/runtime-config-local.yml"
+
+tasks:
+
+  check-yq:
+    internal: true
+    silent: true
+    cmds:
+      - task: check-yq-{{OS}}
+
+  check-yq-windows:
+    internal: true
+    silent: true
+    cmds:
+      - echo "Windows not supported"
+      - exit 1
+
+  check-yq-darwin:
+    internal: true
+    cmds:
+      - task: check-yq-unix
+
+  check-yq-linux:
+    internal: true
+    cmds:
+      - task: check-yq-unix
+
+  check-yq-unix:
+    internal: true
+    silent: true
+    cmds:
+      - |
+        if ! command -v yq &> /dev/null; then
+          echo "❌ Error: yq is not installed"
+          echo ""
+          echo "yq is required for configuration management tasks."
+          echo ""
+          echo "Install yq:"
+          echo "  • macOS:   brew install yq"
+          echo "  • Linux:   See https://github.com/mikefarah/yq#install"
+          echo ""
+          exit 1
+        fi
+
+  default: task --list-all
+
+  build:
+    desc: Build Lambda function and prepare distribution
+    requires:
+      vars: [SHORT_SHA, AWS_CODEARTIFACT_TOKEN]
+    sources:
+      - src/**/*.ts
+      - src/**/*.js
+      - src/**/*.yaml
+      - src/**/*.yml
+      - package.json
+      - tsconfig.json
+    generates:
+      - "{{.ROOT_DIR}}/dist/{{.SHORT_SHA}}.zip"
+      - "{{.ROOT_DIR}}/dist/sherpa.yml"
+      - "{{.ROOT_DIR}}/dist/config.zip"
+    silent: true
+    cmds:
+      - echo "Building Lambda function ({{.SHORT_SHA}})..."
+      - rm -rf {{.ROOT_DIR}}/build && mkdir -p {{.ROOT_DIR}}/build
+      - pnpm install
+      - pnpm run build
+      - pnpm test
+      - rm -rf {{.ROOT_DIR}}/dist && mkdir -p {{.ROOT_DIR}}/dist
+      - task build-config
+      - cd {{.ROOT_DIR}}/build && zip -r {{.ROOT_DIR}}/dist/{{.SHORT_SHA}}.zip .
+      - cp {{.ROOT_DIR}}/sherpa/sherpa.yml {{.ROOT_DIR}}/dist/sherpa.yml
+      - ls -lh {{.ROOT_DIR}}/dist
+
+  test:
+    desc: Run Tests
+    env:
+      AWS_CODEARTIFACT_TOKEN:
+        sh: aws codeartifact get-authorization-token
+          --profile fb-common-non-prod/Repository-ReadOnly
+          --domain fullbay
+          --domain-owner 851725176053
+          --region us-west-2
+          --query authorizationToken
+          --output text
+    cmds:
+      - pnpm install
+      - pnpm test
+
+  local-build-and-test:
+    desc: Run the local build and test
+    env:
+      AWS_CODEARTIFACT_TOKEN:
+        sh: aws codeartifact get-authorization-token
+          --profile fb-common-non-prod/Repository-ReadOnly
+          --domain fullbay
+          --domain-owner 851725176053
+          --region us-west-2
+          --query authorizationToken
+          --output text
+    cmds:
+      - pnpm install
+      - pnpm run build
+      - pnpm test
+
+  container-build-and-test:
+    desc: Run the build in a container just like it does in harness
+    vars:
+      SHERPA_CONFIG:
+        sh: cat "{{.ROOT_DIR}}"/sherpa/sherpa.yml
+      PARSED_SHERPA_CONFIG:
+        ref: "fromYaml .SHERPA_CONFIG"
+      SHORT_SHA:
+        sh: git rev-parse --short HEAD
+    env:
+      AWS_CODEARTIFACT_TOKEN:
+        sh: aws codeartifact get-authorization-token
+          --profile fb-common-non-prod/Repository-ReadOnly
+          --domain fullbay
+          --domain-owner 851725176053
+          --region us-west-2
+          --query authorizationToken
+          --output text
+      SHORT_SHA: "{{.SHORT_SHA}}"
+    cmds:
+      - aws ecr get-login-password
+        --region us-west-2
+        --profile fb-ops-idp-prod/Repository-ReadOnly
+        | docker login --username AWS --password-stdin 533267115767.dkr.ecr.us-west-2.amazonaws.com
+      - docker run --rm
+        -v "{{.ROOT_DIR}}:/harness"
+        -w /harness
+        -e AWS_CODEARTIFACT_TOKEN
+        -e SHORT_SHA={{.SHORT_SHA}}
+        -e CI=true
+        {{.PARSED_SHERPA_CONFIG.build.image}}
+        sh -c "task build"
+
+  create-runtime-config:
+    vars:
+      CONFIG_FILE: "sherpa/runtime-config.yml"
+    desc: Create runtime-config.yml for a specific environment (ENV=localdev|dev|qa|stage|prod)
+    silent: true
+    deps:
+      - check-yq
+    cmds:
+      - task: create-runtime-config-{{OS}}
+
+  create-runtime-config-windows:
+    internal: true
+    cmds:
+      - echo "Windows not supported"
+      - exit 1
+
+  create-runtime-config-darwin:
+    internal: true
+    cmds:
+      - task: create-runtime-config-unix
+
+  create-runtime-config-linux:
+    internal: true
+    cmds:
+      - task: create-runtime-config-unix
+
+  create-runtime-config-unix:
+    internal: true
+    vars:
+      CONFIG_FILE: "sherpa/runtime-config.yml"
+      OUTPUT_FILE: "sherpa/runtime-config.yml.{{.ENV}}"
+    cmds:
+      - |
+        # Validate ENV parameter
+        if [ -z "{{.ENV}}" ]; then
+          echo "✗ Error: ENV parameter is required"
+          echo ""
+          echo "Usage: task create-runtime-config ENV=<environment>"
+          echo ""
+          echo "Available environments:"
+          echo "  • localdev"
+          echo "  • eph_dev"
+          echo "  • dev"
+          echo "  • qa"
+          echo "  • stage"
+          echo "  • prod"
+          echo ""
+          echo "Example: task create-runtime-config ENV=dev"
+          exit 1
+        fi
+
+        # Validate environment value
+        case "{{.ENV}}" in
+          localdev|eph_dev|dev|qa|stage|prod)
+            ;;
+          *)
+            echo "✗ Invalid environment: {{.ENV}}"
+            echo ""
+            echo "Valid environments: localdev, eph_dev, dev, qa, stage, prod"
+            exit 1
+            ;;
+        esac
+
+        # Check that runtime-config.yml exists
+        if [ ! -f "{{.CONFIG_FILE}}" ]; then
+          echo "✗ Config file not found: {{.CONFIG_FILE}}"
+          exit 1
+        fi
+
+        echo "Creating runtime-config.yml for environment: {{.ENV}}"
+        echo ""
+
+        # Merge default + environment-specific config
+        OUTPUT_FILE="sherpa/runtime-config.yml.{{.ENV}}"
+
+        yq eval-all '. as $item ireduce ({}; . * $item)' \
+          <(yq '.default' {{.CONFIG_FILE}}) \
+          <(yq ".environments.{{.ENV}}" {{.CONFIG_FILE}}) \
+          > "$OUTPUT_FILE"
+
+        if [ $? -ne 0 ]; then
+          echo "✗ Failed to merge config for {{.ENV}}"
+          exit 1
+        fi
+
+        echo "✓ Created: $OUTPUT_FILE"
+        echo ""
+        echo "Preview of merged configuration:"
+        echo "================================"
+        cat "$OUTPUT_FILE"
+        echo "================================"
+        echo ""
+        echo "✅ Runtime config for {{.ENV}} created successfully!"
+        echo ""
+        echo "Note: Secrets remain ENCRYPTED in this file"
+        echo "      They will be decrypted during deployment by sherpa CLI"
+
+  run-local:
+    vars:
+      CONFIG_FILE: "sherpa/runtime-config.yml"
+      IS_WINDOWS:
+        sh: |
+          if [ "{{OS}}" = "windows" ]; then
+            echo "true"
+          else
+            echo "false"
+          fi
+    desc: Create runtime config and run application locally (uses localdev environment)
+    deps:
+      - check-yq
+    cmds:
+      - task create-runtime-config ENV=localdev
+      - task: run-local-{{OS}}
+
+  run-local-windows:
+    internal: true
+    cmds:
+      - echo "Windows not supported"
+      - exit 1
+
+  run-local-darwin:
+    internal: true
+    cmds:
+      - task: run-local-unix
+
+  run-local-linux:
+    internal: true
+    cmds:
+      - task: run-local-unix
+
+  run-local-unix:
+    internal: true
+    vars:
+      CONFIG_FILE: "{{.ROOT_DIR}}/sherpa/runtime-config.yml.localdev"
+      DECRYPTED_FILE: "{{.ROOT_DIR}}/sherpa/runtime-config-local.yml"
+    cmds:
+      - |
+        echo "🚀 Starting local application with localdev configuration"
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Replacing encrypted values with plain text for local development"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+
+        CONFIG_FILE="{{.CONFIG_FILE}}"
+        DECRYPTED_FILE="{{.DECRYPTED_FILE}}"
+
+        # Check if decrypted file already exists
+        if [ -f "$DECRYPTED_FILE" ]; then
+          echo "ℹ️  Found existing decrypted config file"
+          echo ""
+
+          # Backup existing file
+          cp "$DECRYPTED_FILE" "${DECRYPTED_FILE}.backup"
+
+          # Start with the NEW config as base (this removes obsolete keys)
+          cp "$CONFIG_FILE" "$DECRYPTED_FILE"
+
+          # Get list of non-encrypted values from backup (plain text secrets we want to preserve)
+          # Find paths that exist in BOTH new config AND old config, where old value is not encrypted
+          OLD_PATHS=$(yq eval '.. | select(type == "!!str") | select(. | test("^AQI[A-Za-z0-9+/=]{100,}$") | not) | path | join(".")' "${DECRYPTED_FILE}.backup")
+
+          if [ -n "$OLD_PATHS" ]; then
+            echo "Restoring previously decrypted values for keys that still exist..."
+
+            for KEY_PATH in $OLD_PATHS; do
+              # Check if this key exists in the new config
+              NEW_VALUE=$(yq eval ".$KEY_PATH" "$DECRYPTED_FILE" 2>/dev/null)
+
+              if [ "$NEW_VALUE" != "null" ] && [ -n "$NEW_VALUE" ]; then
+                # Key exists in new config, restore the old decrypted value
+                OLD_VALUE=$(yq eval ".$KEY_PATH" "${DECRYPTED_FILE}.backup")
+                yq eval ".$KEY_PATH = \"$OLD_VALUE\"" -i "$DECRYPTED_FILE"
+                echo "  ✓ Restored: $KEY_PATH"
+              fi
+            done
+            echo ""
+          fi
+
+          echo "✓ Applied existing decrypted values to new configuration structure"
+          echo ""
+        else
+          echo "ℹ️  No existing decrypted config found, creating new one"
+          echo ""
+          # Copy the file first
+          cp "$CONFIG_FILE" "$DECRYPTED_FILE"
+        fi
+
+        # Find keys with encrypted values (starting with "AQI" and longer than 100 chars)
+        PATHS=$(yq eval '.. | select(type == "!!str") | select(. | test("^AQI[A-Za-z0-9+/=]{100,}$")) | path | join(".")' "$DECRYPTED_FILE")
+
+        if [ -z "$PATHS" ]; then
+          echo "✓ No encrypted values found - all secrets already decrypted!"
+          echo ""
+        else
+          echo "Found encrypted values that need to be decrypted:"
+          echo ""
+
+          for KEY_PATH in $PATHS; do
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Key: $KEY_PATH"
+            echo ""
+            read -p "Enter plain text value (or press Enter to skip): " PLAIN_VALUE
+
+            if [ -n "$PLAIN_VALUE" ]; then
+              yq eval ".$KEY_PATH = \"$PLAIN_VALUE\"" -i "$DECRYPTED_FILE"
+              echo "✓ Value set"
+            else
+              echo "⊘ Keeping encrypted value"
+            fi
+            echo ""
+          done
+        fi
+
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "Configuration saved to: $DECRYPTED_FILE"
+        echo ""
+        echo "Preview of configuration:"
+        echo "================================"
+        cat "$DECRYPTED_FILE"
+        echo "================================"
+        echo ""
+
+        # Cleanup intermediate merged file and backup
+        echo "Cleaning up intermediate files..."
+        rm -f "{{.ROOT_DIR}}/sherpa/runtime-config.yml.localdev"
+        rm -f "${DECRYPTED_FILE}.backup"
+        echo ""
+
+        echo "Setting FB_CONFIG_PATH and starting local development..."
+        echo ""
+
+        # Set the config path to the decrypted file and run local development
+        export FB_CONFIG_PATH="$DECRYPTED_FILE"
+        echo "FB_CONFIG_PATH=$FB_CONFIG_PATH"
+        echo ""
+
+  build-config:
+    vars:
+      CONFIG_FILE: "sherpa/runtime-config.yml"
+      DIST_DIR: "./dist"
+    desc: Build config.zip with merged configs for all environments
+    silent: true
+    deps:
+      - check-yq
+    cmds:
+      - |
+        echo "Building configuration artifact..."
+        echo "Short SHA: {{.SHORT_SHA}}"
+        echo ""
+
+        # Check that runtime-config.yml exists
+        if [ ! -f "{{.CONFIG_FILE}}" ]; then
+          echo "✗ Config file not found: {{.CONFIG_FILE}}"
+          exit 1
+        fi
+
+        # Create build directory structure
+        BUILD_PATH="{{.DIST_DIR}}/sherpa"
+        mkdir -p "$BUILD_PATH"
+
+        # List of environments to build
+        ENVIRONMENTS="localdev eph_dev dev qa stage prod"
+
+        echo "Merging configs for each environment..."
+        for env in $ENVIRONMENTS; do
+          echo "  • Processing $env..."
+
+          # Merge default + environment-specific config
+          # This creates a flattened config file for each environment
+          yq eval-all '. as $item ireduce ({}; . * $item)' \
+            <(yq '.default' {{.CONFIG_FILE}}) \
+            <(yq ".environments.$env" {{.CONFIG_FILE}}) \
+            > "$BUILD_PATH/${env}-runtime-config.yml"
+
+          if [ $? -ne 0 ]; then
+            echo "✗ Failed to merge config for $env"
+            exit 1
+          fi
+
+          echo "    ✓ Created ${env}-runtime-config.yml"
+        done
+
+        # Create config.zip from the sherpa directory
+        echo ""
+        echo "Creating config.zip..."
+        cd "{{.DIST_DIR}}"
+        zip -r config.zip sherpa/ > /dev/null 2>&1
+
+        if [ $? -ne 0 ]; then
+          echo "✗ Failed to create config.zip"
+          exit 1
+        fi
+
+        cd - > /dev/null
+
+        CONFIG_ZIP_PATH="{{.DIST_DIR}}/config.zip"
+        CONFIG_SIZE=$(du -h "$CONFIG_ZIP_PATH" | cut -f1)
+
+        echo "✓ Created config.zip ($CONFIG_SIZE)"
+        echo ""
+        echo "Build structure:"
+        echo "  {{.DIST_DIR}}/"
+        echo "    ├── sherpa/"
+        echo "    │   ├── localdev-runtime-config.yml"
+        echo "    │   ├── eph_dev-runtime-config.yml"
+        echo "    │   ├── dev-runtime-config.yml"
+        echo "    │   ├── qa-runtime-config.yml"
+        echo "    │   ├── stage-runtime-config.yml"
+        echo "    │   └── prod-runtime-config.yml"
+        echo "    └── config.zip"
+        echo ""
+        echo "✅ Config build complete!"
+        echo ""
+        echo "Note: Secrets remain ENCRYPTED in config.zip"
+        echo "      They will be decrypted during deployment by sherpa CLI"
+        echo "Cleaning up tmp files {{.ROOT_DIR}}/{{.DIST_DIR}}/sherpa"
+        rm -rf {{.ROOT_DIR}}/{{.DIST_DIR}}/sherpa
+
+  encrypt-secret:
+    vars:
+      AWS_PROFILE: '{{.AWS_PROFILE | default "fb-dev-non-prod/FB-Developer"}}'
+      KMS_KEY_ALIAS: "arn:aws:kms:us-west-2:533267115767:alias/app-secrets"
+      CONFIG_FILE: "sherpa/runtime-config.yml"
+      SHORT_SHA:
+        sh: git rev-parse --short=7 HEAD
+      BUILD_DIR: "./build"
+    silent: true
+    desc: Encrypt a secret value using KMS (fb-developer profile - encrypt only)
+    cmds:
+      - |
+        if [ -z "{{.SECRET}}" ]; then
+          echo "Error: SECRET parameter is required"
+          echo "Usage: task encrypt-secret SECRET=\"your-secret-value\" ENV=dev"
+          exit 1
+        fi
+
+        echo "Encrypting secret"
+        echo "Using AWS profile: {{.AWS_PROFILE}}"
+        echo ""
+
+        # Write secret to temporary file
+        echo "createing tmp file"
+        TMPFILE=$(mktemp)
+        trap "rm -f $TMPFILE" EXIT
+        echo -n "{{.SECRET}}" > "$TMPFILE"
+        cat $TMPFILE
+
+        # Encrypt the secret
+        ENCRYPTED=$(aws kms encrypt \
+          --key-id {{.KMS_KEY_ALIAS}} \
+          --plaintext "$(cat "$TMPFILE" | base64 | tr -d '\n')" \
+          --query CiphertextBlob \
+          --output text \
+          --profile {{.AWS_PROFILE}} \
+          --region us-west-2)
+
+        if [ $? -ne 0 ]; then
+          echo "✗ Failed to encrypt secret"
+          echo "Check that:"
+          echo "  1. AWS profile '{{.AWS_PROFILE}}' is configured"
+          echo "  2. You have kms:Encrypt permission on {{.KMS_KEY_ALIAS}}"
+          exit 1
+        fi
+
+        echo "✓ Encryption successful!"
+        echo ""
+        echo "Add this encrypted value to {{.CONFIG_FILE}}:"
+        echo "----------------------------------------"
+        echo "$ENCRYPTED"
+        echo "----------------------------------------"

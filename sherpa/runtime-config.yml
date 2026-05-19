@@ -1,0 +1,42 @@
+default:
+  values:
+    DB_PORT: 3306
+
+  secrets:
+    DB_USER: "AQICAHjSKnWrYukgQaD4MJ3T7OJi/83B5q+AoC6NumJC2fVnHAG7ht2i6cfxYlOYSGglv53FAAAAYzBhBgkqhkiG9w0BBwagVDBSAgEAME0GCSqGSIb3DQEHATAeBglghkgBZQMEAS4wEQQMS1PlubWTOHBPJuQSAgEQgCAeXH6vCaE0OzWlp4M6aHUP53k45JbbPZmvMPFfOzBkRw=="
+    DB_PWD: "AQICAHjSKnWrYukgQaD4MJ3T7OJi/83B5q+AoC6NumJC2fVnHAF4kaicgzRgHScNasMqw5JyAAAAcjBwBgkqhkiG9w0BBwagYzBhAgEAMFwGCSqGSIb3DQEHATAeBglghkgBZQMEAS4wEQQMv+gn42DM4gutln5IAgEQgC8eWJFdmjB1Okl/UrBfy+nbRuuSB/bJWlEP4IByNnUswrBMvVEG5r3wpMAuxd29wA=="
+
+environments:
+  # localdev references the AWS "local dev" environment
+  localdev:
+  # eph_dev is for PR deployments
+  eph_dev:
+    values:
+      DB_HOST: fullbaydevelopment.ccrb4rqyc6yi.us-west-2.rds.amazonaws.com
+      DB_NAME: fullbaydev
+      NO_AUTH: true
+  dev:
+    values:
+      DB_HOST: fullbaydevelopment.ccrb4rqyc6yi.us-west-2.rds.amazonaws.com
+      DB_NAME: fullbaydev
+      NO_AUTH: true
+  qa:
+    values:
+      DB_HOST: fullbaydevelopment.ccrb4rqyc6yi.us-west-2.rds.amazonaws.com
+      DB_NAME: fullbaydev
+      NO_AUTH: false
+  stage:
+    values:
+      DB_HOST: fullbaydevelopment.ccrb4rqyc6yi.us-west-2.rds.amazonaws.com
+      DB_NAME: fullbaydev
+      NO_AUTH: false
+  demo:
+    values:
+      DB_HOST: fullbayproductionreadonly.ccrb4rqyc6yi.us-west-2.rds.amazonaws.com
+      DB_NAME: fullbay
+      NO_AUTH: false
+  prod:
+    values:
+      DB_HOST: fullbayproductionreadonly.ccrb4rqyc6yi.us-west-2.rds.amazonaws.com
+      DB_NAME: fullbay
+      NO_AUTH: false

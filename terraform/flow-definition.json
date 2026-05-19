@@ -1,0 +1,107 @@
+{
+  "nodes": [
+    {
+      "name": "FlowInputNode",
+      "type": "Input",
+      "configuration": {
+        "input": {
+          "fields": [
+            {
+              "name": "inputText",
+              "type": "String"
+            },
+            {
+              "name": "inputField",
+              "type": "String"
+            }
+          ]
+        }
+      },
+      "outputs": [
+        {
+          "name": "document",
+          "type": "Object"
+        }
+      ]
+    },
+    {
+      "name": "EnhanceTextNode",
+      "type": "Prompt",
+      "configuration": {
+        "prompt": {
+          "text": "You are helping improve an input field on a service order for vehicle repair shop.\n\nEnhance text: \"{{inputText}}\"\nwhile considering:\n- Maintaining all technical details and accuracy\n- Using proper automotive terminology\n- Ensuring clarity and completeness\n- Maintaining a professional tone\n- be concise, just give me your best take\n- tailor response to name of field: \"{{inputField}}\""
+        },
+        "sourceConfiguration": {
+          "inline": {
+            "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "inferenceConfiguration": {
+              "text": {
+                "maxTokens": 2000,
+                "temperature": 0.1,
+                "topP": 1.0
+              }
+            }
+          }
+        }
+      },
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Object",
+          "expression": "$.data"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "modelCompletion",
+          "type": "String"
+        }
+      ]
+    },
+    {
+      "name": "FlowOutputNode",
+      "type": "Output",
+      "configuration": {
+        "output": {
+          "fields": [
+            {
+              "name": "enhancedText",
+              "type": "String"
+            }
+          ]
+        }
+      },
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Object",
+          "expression": "$.data"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "name": "StartToEnhance",
+      "source": "FlowInputNode",
+      "target": "EnhanceTextNode",
+      "configuration": {
+        "data": {
+          "sourceOutput": "document",
+          "targetInput": "input"
+        }
+      }
+    },
+    {
+      "name": "EnhanceToEnd",
+      "source": "EnhanceTextNode",
+      "target": "FlowOutputNode",
+      "configuration": {
+        "data": {
+          "sourceOutput": "modelCompletion",
+          "targetInput": "input"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+# Gradle
+.gradle/
+build/
+
+# Eclipse
+.project
+.classpath
+.settings/
+bin/
+
+# IntelliJ
+.idea
+*.ipr
+*.iml
+*.iws
+
+# NetBeans
+nb-configuration.xml
+
+# Visual Studio Code
+.vscode
+.factorypath
+
+# OSX
+.DS_Store
+
+# Vim
+*.swp
+*.swo
+
+# patch
+*.orig
+*.rej
+
+# Local environment
+runtime-config-local.yml
+.envrc
+src/localTests/
+coverage/
+
+# Plugin directory
+/.quarkus/cli/plugins/
+# TLS Certificates
+.certs/
+
+# Terraform
+_backend.tf
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+node_modules
+dist
+.pnpm-store
+sherpa/runtime-config-local.yml
+.task

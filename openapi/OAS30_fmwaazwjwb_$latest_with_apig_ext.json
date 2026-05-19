@@ -1,0 +1,68 @@
+{
+  "openapi" : "3.0.1",
+  "info" : {
+    "title" : "skynet-apigwv2",
+    "version" : "2025-08-25 14:11:38UTC"
+  },
+  "servers" : [ {
+    "url" : "https://fmwaazwjwb.execute-api.us-west-2.amazonaws.com/{basePath}",
+    "variables" : {
+      "basePath" : {
+        "default" : ""
+      }
+    }
+  } ],
+  "paths" : {
+    "/api/v1/text-feedback" : {
+      "post" : {
+        "responses" : {
+          "default" : {
+            "description" : "Default response for POST /api/v1/text-feedback"
+          }
+        },
+        "x-amazon-apigateway-integration" : {
+          "payloadFormatVersion" : "2.0",
+          "type" : "aws_proxy",
+          "httpMethod" : "POST",
+          "uri" : "arn:aws:apigateway:us-west-2:lambda:path/2015-03-31/functions/arn:aws:lambda:us-west-2:345594586248:function:skynet/invocations",
+          "connectionType" : "INTERNET"
+        }
+      }
+    },
+    "/api/v1/text-transform" : {
+      "post" : {
+        "responses" : {
+          "default" : {
+            "description" : "Default response for POST /api/v1/text-transform"
+          }
+        },
+        "x-amazon-apigateway-integration" : {
+          "payloadFormatVersion" : "2.0",
+          "type" : "aws_proxy",
+          "httpMethod" : "POST",
+          "uri" : "arn:aws:apigateway:us-west-2:lambda:path/2015-03-31/functions/arn:aws:lambda:us-west-2:345594586248:function:skynet/invocations",
+          "connectionType" : "INTERNET"
+        }
+      }
+    }
+  },
+  "components" : {
+    "x-amazon-apigateway-integrations" : {
+      "unusedIntegration_v0zb282" : {
+        "payloadFormatVersion" : "2.0",
+        "type" : "aws_proxy",
+        "httpMethod" : "POST",
+        "uri" : "arn:aws:apigateway:us-west-2:lambda:path/2015-03-31/functions/arn:aws:lambda:us-west-2:345594586248:function:skynet-feedback/invocations",
+        "connectionType" : "INTERNET"
+      }
+    }
+  },
+  "x-amazon-apigateway-cors" : {
+    "allowMethods" : [ "POST" ],
+    "allowHeaders" : [ "*" ],
+    "maxAge" : 0,
+    "allowCredentials" : false,
+    "allowOrigins" : [ "*" ]
+  },
+  "x-amazon-apigateway-importexport-version" : "1.0"
+}
