@@ -9,7 +9,7 @@ import {authorizeKey, type AuthZ} from "./authorizer";
 const bedrockClient = new BedrockRuntimeClient();
 const eventBridgeClient = new EventBridgeClient();
 const allowedActions = ['ACCEPT', 'REJECT', 'REVERT'] as const;
-const shortSha = process.env['SHORT_SHA'] ?? "wor-aitxtcleanup-fun";
+const shortSha = process.env['SHORT_SHA'] ?? "hor-ai-assist-fun";
 const MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 const EVENT_BUS_NAME = "wor-aitxtcleanup-fun";
 const textDecoder = new TextDecoder();
@@ -28,9 +28,12 @@ type GeneratedResponse = {
   entityLocationId?: number;
 };
 
+type Message = { role: "user" | "assistant"; content: string };
+
 type GenerateRequestBody = {
   inputField: string;
-  inputText: string;
+  inputText?: string; // Optional for backwards compatibility
+  messages?: Message[]; // New field for chat history
   authInfo?: AuthZ;
 };
 
@@ -62,33 +65,34 @@ console.info(`INIT Text Cleanup Function (${shortSha})`);
  Call Bedrock to generate cleaned-up text and return it.
  */
 async function generateText(requestBody: GenerateRequestBody, requestId: string): Promise<APIGatewayProxyResult> {
-  const {inputField, inputText} = requestBody;
+  const {inputField, inputText, messages} = requestBody;
 
-  // Validate required fields
-  if (inputText === undefined || inputText === '' || inputField === undefined || inputField === '') {
-    console.error(`[${shortSha}-${requestId}] Missing required fields`, {
-      hasInputField: inputField !== undefined && inputField !== '',
-      hasInputText: inputText !== undefined && inputText !== '',
-    });
-    return createErrorResponse(400, "'inputText' and 'inputField' are both required");
+  // Validate required fields: Needs inputField, and either inputText OR messages
+  const hasContent = (inputText !== undefined && inputText !== '') || (messages !== undefined && messages.length > 0);
+  if (!hasContent || inputField === undefined || inputField === '') {
+    console.error(`[${shortSha}-${requestId}] Missing required fields`);
+    return createErrorResponse(400, "Either 'inputText' or 'messages' must be provided, along with 'inputField'");
   }
 
-  // Construct the prompt manually (using the same prompt from the flow)
-  const prompt = `You are helping improve an input field on a service order for vehicle repair shop.
+  // 1. Isolate the AI's core instructions into a System Prompt
+  const systemPrompt = `You are helping improve an input field on a service order for vehicle repair shop.
 The input field that you are helping is: ${inputField}
 - maintaining all technical details and accuracy
 - using proper automotive terminology
 - be concise with clarity and completeness
 - maintain a professional tone
 - return all responses in English
-- do NOT put the inputField at the beginning of the response
-Please enhance this input text below: ${inputText}
 Return only the enhanced text with no explanation or commentary.`;
+
+  // 2. Use the provided chat history, or fallback to the old inputText format
+  const chatMessages = messages && messages.length > 0 
+    ? messages 
+    : [{ role: "user" as const, content: inputText || "" }];
 
   console.info(`[${shortSha}-${requestId}] Invoking Bedrock model`, {
     modelId: MODEL_ID,
     inputFieldLength: inputField.length,
-    inputTextLength: inputText.length,
+    isChatMode: !!messages,
   });
 
   const command = new InvokeModelCommand({
@@ -99,12 +103,8 @@ Return only the enhanced text with no explanation or commentary.`;
       anthropic_version: "bedrock-2023-05-31",
       max_tokens: 2000,
       temperature: 0.1,
-      messages: [
-        {
-          role: "user",
-          content: prompt
-        }
-      ]
+      system: systemPrompt,
+      messages: chatMessages
     })
   });
 
@@ -113,20 +113,13 @@ Return only the enhanced text with no explanation or commentary.`;
     const response = await bedrockClient.send(command);
     const duration = Date.now() - startTime;
 
-    console.info(
-        `[${shortSha}-${requestId}] Bedrock model invoked successfully`,
-        {
-          durationMs: duration,
-        }
-    );
+    console.info(`[${shortSha}-${requestId}] Bedrock model invoked successfully`, { durationMs: duration });
 
-    // Parse the response body
     const responseBody = JSON.parse(textDecoder.decode(response.body)) as {
       content: Array<{ text: string }>;
       usage: { input_tokens: number; output_tokens: number };
     };
 
-    // Extract the text from Claude's response
     const firstContent = responseBody.content[0];
     if (firstContent === undefined) {
       throw new Error('No content in response');
@@ -135,20 +128,11 @@ Return only the enhanced text with no explanation or commentary.`;
 
     const modelResponse = {
       generationId: `${shortSha}-${requestId}`,
-      content: {
-        document: outputText
-      },
-      // Include metrics for compatibility
+      content: { document: outputText },
       usage: responseBody.usage
     };
 
-    console.info(`[${shortSha}-${requestId}] Request completed successfully`, {
-      inputTokens: responseBody.usage.input_tokens,
-      outputTokens: responseBody.usage.output_tokens
-    });
-
     try {
-      // Send analytics data to EventBridge (non-blocking)
       const entityId = requestBody.authInfo?.me?.entityId ?? requestBody.authInfo?.adminId;
       const entityEmployeeId = requestBody.authInfo?.me?.entityEmployeeId ?? requestBody.authInfo?.id;
       const entityLocationId = requestBody.authInfo?.me?.entityLocationId;
@@ -158,31 +142,20 @@ Return only the enhanced text with no explanation or commentary.`;
         type: "GENERATION",
         output: modelResponse,
         inputField,
-        inputText,
+        inputText: inputText || "CHAT_MODE",
         ...(entityId !== undefined && { entityId }),
         ...(entityEmployeeId !== undefined && { entityEmployeeId }),
         ...(entityLocationId !== undefined && { entityLocationId }),
       });
     } catch (error) {
-      // An error sending to EventBridge shouldn't prevent successful execution of the text
-      // cleanup. It will just mean that the execution won't get saved to S3.
-      console.error(
-          `[${shortSha}-${requestId}] Error sending analytics data to EventBridge:`,
-          error
-      );
+      console.error(`[${shortSha}-${requestId}] Error sending analytics data to EventBridge:`, error);
     }
 
     return createResponse(200, modelResponse);
   } catch (error: unknown) {
-    console.error(
-        `[${shortSha}-${requestId}] Error invoking Bedrock model:`,
-        error
-    );
+    console.error(`[${shortSha}-${requestId}] Error invoking Bedrock model:`, error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    return createErrorResponse(
-        500,
-        `Bedrock model error: ${errorMessage}`
-    );
+    return createErrorResponse(500, `Bedrock model error: ${errorMessage}`);
   }
 }
 
