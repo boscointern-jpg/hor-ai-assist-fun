@@ -1,4 +1,4 @@
-# wor-aitxtcleanup-fun
+# hor-aitxtcleanup-fun
 
 AI Text Cleanup and Feedback Lambda function that uses Amazon Bedrock (Claude) to generate cleaned-up versions of service order text. It also records user feedback (accept/reject/revert) on generated text for later analysis and prompt improvement.
 
