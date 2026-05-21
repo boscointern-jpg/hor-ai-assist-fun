@@ -1,10 +1,10 @@
 /* eslint-env node */
 import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
-import { EventBridgeClient, PutEventsCommand,} from "@aws-sdk/client-eventbridge";
-import { loadRuntimeConfig} from "@fullbay/idp-commonutil-node-lib";
+import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
+import { loadRuntimeConfig } from "@fullbay/idp-commonutil-node-lib";
 import { type APIGatewayProxyEvent, type APIGatewayProxyResult, type Context } from "aws-lambda";
 
-import {authorizeKey, type AuthZ} from "./authorizer";
+import { authorizeKey, type AuthZ } from "./authorizer";
 
 const bedrockClient = new BedrockRuntimeClient();
 const eventBridgeClient = new EventBridgeClient();
@@ -31,9 +31,8 @@ type GeneratedResponse = {
 type Message = { role: "user" | "assistant"; content: string };
 
 type GenerateRequestBody = {
-  inputField: string;
-  inputText?: string; // Optional for backwards compatibility
-  messages?: Message[]; // New field for chat history
+  fields: Record<string, string>;
+  messages: Message[];
   authInfo?: AuthZ;
 };
 
@@ -65,34 +64,34 @@ console.info(`INIT Text Cleanup Function (${shortSha})`);
  Call Bedrock to generate cleaned-up text and return it.
  */
 async function generateText(requestBody: GenerateRequestBody, requestId: string): Promise<APIGatewayProxyResult> {
-  const {inputField, inputText, messages} = requestBody;
+  const { fields, messages } = requestBody;
 
-  // Validate required fields: Needs inputField, and either inputText OR messages
-  const hasContent = (inputText !== undefined && inputText !== '') || (messages !== undefined && messages.length > 0);
-  if (!hasContent || inputField === undefined || inputField === '') {
+  // Validate required fields
+  if (!fields || Object.keys(fields).length === 0 || !messages || messages.length === 0) {
     console.error(`[${shortSha}-${requestId}] Missing required fields`);
-    return createErrorResponse(400, "Either 'inputText' or 'messages' must be provided, along with 'inputField'");
+    return createErrorResponse(400, "'fields' object and 'messages' array are required.");
   }
 
-  // 1. Isolate the AI's core instructions into a System Prompt
-  const systemPrompt = `You are helping improve an input field on a service order for vehicle repair shop.
-The input field that you are helping is: ${inputField}
-- maintaining all technical details and accuracy
-- using proper automotive terminology
-- be concise with clarity and completeness
-- maintain a professional tone
-- return all responses in English
-Return only the enhanced text with no explanation or commentary.`;
+  const fieldNames = Object.keys(fields).join(', ');
 
-  // 2. Use the provided chat history, or fallback to the old inputText format
-  const chatMessages = messages && messages.length > 0 
-    ? messages 
-    : [{ role: "user" as const, content: inputText || "" }];
+  // 1. Instruct Claude to act as a data processor and return STRICT JSON
+  const systemPrompt = `You are a technical assistant helping a mechanic fill out a service order.
+Here are the current fields and their existing values:
+${JSON.stringify(fields, null, 2)}
 
-  console.info(`[${shortSha}-${requestId}] Invoking Bedrock model`, {
+Instructions:
+- Read the conversation history to understand the mechanic's updates.
+- Update the relevant fields based on the context.
+- Maintain technical details, accuracy, and proper automotive terminology.
+- Be concise with clarity and completeness.
+
+CRITICAL: You must respond ONLY with a valid JSON object containing the updated fields. 
+The keys must match these exact field names: ${fieldNames}. 
+Do not include any markdown formatting, explanations, or conversational text. Return ONLY raw JSON.`;
+
+  console.info(`[${shortSha}-${requestId}] Invoking Bedrock model for Multi-Field`, {
     modelId: MODEL_ID,
-    inputFieldLength: inputField.length,
-    isChatMode: !!messages,
+    fieldCount: Object.keys(fields).length
   });
 
   const command = new InvokeModelCommand({
@@ -104,7 +103,7 @@ Return only the enhanced text with no explanation or commentary.`;
       max_tokens: 2000,
       temperature: 0.1,
       system: systemPrompt,
-      messages: chatMessages
+      messages: messages
     })
   });
 
@@ -120,15 +119,26 @@ Return only the enhanced text with no explanation or commentary.`;
       usage: { input_tokens: number; output_tokens: number };
     };
 
-    const firstContent = responseBody.content[0];
-    if (firstContent === undefined) {
-      throw new Error('No content in response');
+    if (!responseBody.content[0]) throw new Error('No content in response');
+    
+    // 2. Clean and parse the JSON output from Claude (using CharCodes to bypass UI rendering bugs)
+    let rawOutput = responseBody.content[0].text.trim();
+    const mdBlock = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+    rawOutput = rawOutput.replace(new RegExp('^' + mdBlock + '(?:json)?\\n?', 'i'), '')
+                         .replace(new RegExp('\\n?' + mdBlock + '$', 'i'), '')
+                         .trim();
+    
+    let updatedFields;
+    try {
+      updatedFields = JSON.parse(rawOutput);
+    } catch (e) {
+      console.error(`[${shortSha}-${requestId}] Failed to parse Claude output as JSON. Output:`, rawOutput);
+      return createErrorResponse(500, "AI returned malformed data.");
     }
-    const outputText = firstContent.text;
 
     const modelResponse = {
       generationId: `${shortSha}-${requestId}`,
-      content: { document: outputText },
+      content: updatedFields,
       usage: responseBody.usage
     };
 
@@ -141,8 +151,8 @@ Return only the enhanced text with no explanation or commentary.`;
         generationId: `${shortSha}-${requestId}`,
         type: "GENERATION",
         output: modelResponse,
-        inputField,
-        inputText: inputText || "CHAT_MODE",
+        inputField: "MULTI_FIELD",
+        inputText: "CHAT_MODE",
         ...(entityId !== undefined && { entityId }),
         ...(entityEmployeeId !== undefined && { entityEmployeeId }),
         ...(entityLocationId !== undefined && { entityLocationId }),
