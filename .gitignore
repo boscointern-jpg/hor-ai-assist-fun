@@ -35,7 +35,6 @@ nb-configuration.xml
 # Local environment
 runtime-config-local.yml
 .envrc
-src/localTests/
 coverage/
 
 # Plugin directory
